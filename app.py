@@ -188,7 +188,7 @@ with tab3:
                 # ส่วนที่ 1: สรุปผลการวิเคราะห์ไฟล์บรรยายเชิงลึก
                 # ==========================================
                 st.divider()
-                st.subheader("📊 สรุปภาพรวมอารมณ์ของการบรรยาย (Detailed Summary)")
+                st.subheader("สรุปภาพรวมอารมณ์ของการบรรยาย (Detailed Summary)")
                 
                 total_lines = len(srt_df)
                 pos_count = len(srt_df[srt_df['Prediction_Class'] == 2])
@@ -206,7 +206,7 @@ with tab3:
                 # แสดงประโยคที่มีระดับความมั่นใจสูงสุด
                 colA, colB = st.columns(2)
                 with colA:
-                    st.markdown("**🟢 ประโยคแง่บวกที่ชัดเจนที่สุด 3 อันดับ:**")
+                    st.markdown("**ประโยคแง่บวกที่ชัดเจนที่สุด 3 อันดับ:**")
                     top_pos = srt_df[srt_df['Prediction_Class'] == 2].sort_values(by='Confidence', ascending=False).head(3)
                     if not top_pos.empty:
                         st.dataframe(top_pos[['Time', 'Text']], hide_index=True, use_container_width=True)
@@ -214,7 +214,7 @@ with tab3:
                         st.write("- ไม่พบประโยคแง่บวก -")
                         
                 with colB:
-                    st.markdown("**🔴 ประโยคแง่ลบที่ชัดเจนที่สุด 3 อันดับ:**")
+                    st.markdown("**ประโยคแง่ลบที่ชัดเจนที่สุด 3 อันดับ:**")
                     top_neg = srt_df[srt_df['Prediction_Class'] == 0].sort_values(by='Confidence', ascending=False).head(3)
                     if not top_neg.empty:
                         st.dataframe(top_neg[['Time', 'Text']], hide_index=True, use_container_width=True)
@@ -225,7 +225,7 @@ with tab3:
                 # ส่วนที่ 2: Word Cloud จากไฟล์ SRT
                 # ==========================================
                 st.divider()
-                st.subheader("☁️ ภาพรวมคำศัพท์จากบทบรรยาย (Transcript Word Cloud)")
+                st.subheader("ภาพรวมคำศัพท์จากบทบรรยาย (Transcript Word Cloud)")
                 st.markdown("วิเคราะห์ความถี่ของคำศัพท์เพื่อค้นหาหัวข้อหลักที่ถูกพูดถึงมากที่สุดในวิดีโอนี้")
                 
                 # กรองคำศัพท์เฉพาะสำหรับไฟล์ SRT
@@ -259,7 +259,7 @@ with tab3:
                 # ส่วนที่ 3: กราฟ Timeline และตารางรายละเอียด (โค้ดเดิม)
                 # ==========================================
                 st.divider()
-                st.subheader("📈 กราฟแนวโน้มอารมณ์ของการบรรยาย (Sentiment Trajectory)")
+                st.subheader("กราฟแนวโน้มอารมณ์ของการบรรยาย (Sentiment Trajectory)")
                 try:
                     thai_font = fm.FontProperties(fname=font_path, size=12)
                     thai_font_title = fm.FontProperties(fname=font_path, size=16)
@@ -280,7 +280,7 @@ with tab3:
                 ax2.grid(True, linestyle='--', alpha=0.7)
                 st.pyplot(fig2)
                 
-                st.subheader("🔍 รายละเอียดการวิเคราะห์รายบรรทัด")
+                st.subheader("รายละเอียดการวิเคราะห์รายบรรทัด")
                 st.dataframe(srt_df[['Time', 'Text', 'Prediction_Class', 'Confidence']], use_container_width=True)
                 
             else:
