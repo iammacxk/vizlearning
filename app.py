@@ -240,7 +240,7 @@ with tab3:
                                 api_key = st.secrets["GEMINI_API_KEY"]
                                 genai.configure(api_key=api_key)
                                 
-                                model = genai.GenerativeModel('gemini-1.5-flash')
+                                model = genai.GenerativeModel('gemini-2.5-flash')
                                 prompt = f"ทำหน้าที่เป็นผู้ช่วยสอน สรุปเนื้อหาจากบทบรรยาย (Transcript) ต่อไปนี้ให้เป็นประเด็นหลัก 3-5 ข้อ สั้น กระชับ เข้าใจง่าย เป็นภาษาไทย:\n\n{full_transcript}"
                                 
                                 response = model.generate_content(prompt)
