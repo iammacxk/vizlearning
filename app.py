@@ -6,13 +6,14 @@ import matplotlib.font_manager as fm
 import re
 from wordcloud import WordCloud
 from collections import Counter
+from collections import defaultdict
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import make_pipeline
+from sklearn.metrics.pairwise import cosine_similarity
 from lime.lime_text import LimeTextExplainer
 from pythainlp.tokenize import word_tokenize
 from pythainlp.corpus import thai_stopwords
-import google.generativeai as genai
 import streamlit.components.v1 as components
 
 # ==========================================
@@ -81,6 +82,214 @@ df = pd.DataFrame(all_samples, columns=['text', 'label'])
 def thai_tokenizer(text):
     return word_tokenize(text, engine='newmm')
 
+def is_valid_token(token):
+    token = token.strip()
+    if len(token) <= 1:
+        return False
+    if re.fullmatch(r'[\W_]+', token):
+        return False
+    if re.fullmatch(r'\d+', token):
+        return False
+    return True
+
+def build_dynamic_stopwords(texts, base_stopwords, max_new_words=50):
+    token_docs = []
+    term_freq = Counter()
+    doc_freq = defaultdict(int)
+
+    for text in texts:
+        tokens = [w for w in thai_tokenizer(str(text)) if is_valid_token(w)]
+        token_docs.append(tokens)
+        term_freq.update(tokens)
+        for token in set(tokens):
+            doc_freq[token] += 1
+
+    if not token_docs:
+        empty_df = pd.DataFrame(columns=['token', 'df_ratio', 'idf', 'chunk_ratio', 'tf', 'low_information_score', 'reason'])
+        return set(base_stopwords), empty_df
+
+    doc_count = len(token_docs)
+    chunk_count = min(5, max(1, doc_count))
+    chunk_size = max(1, int(np.ceil(doc_count / chunk_count)))
+    chunk_freq = defaultdict(int)
+
+    for i in range(chunk_count):
+        start = i * chunk_size
+        end = min((i + 1) * chunk_size, doc_count)
+        if start >= doc_count:
+            continue
+        chunk_tokens = set()
+        for tokens in token_docs[start:end]:
+            chunk_tokens.update(tokens)
+        for token in chunk_tokens:
+            chunk_freq[token] += 1
+
+    frequent_tokens = {word for word, freq in doc_freq.items() if (freq / doc_count) >= 0.6}
+
+    flattened = [" ".join(tokens) for tokens in token_docs if tokens]
+    low_idf_tokens = set()
+    idf_map = {}
+
+    if flattened:
+        vec = TfidfVectorizer(tokenizer=thai_tokenizer, token_pattern=None)
+        vec.fit_transform(flattened)
+        feature_names = np.array(vec.get_feature_names_out())
+        idf_scores = vec.idf_
+        idf_map = {w: v for w, v in zip(feature_names, idf_scores)}
+        idf_threshold = np.quantile(idf_scores, 0.2)
+        low_idf_tokens = set(feature_names[idf_scores <= idf_threshold])
+
+    protected_words = {
+        'ดี', 'แย่', 'ยาก', 'ง่าย', 'ชอบ', 'ไม่ชอบ', 'สนุก', 'น่าเบื่อ', 'ล่ม', 'ช้า',
+        'เข้าใจ', 'ไม่เข้าใจ', 'เครียด', 'ประทับใจ', 'พัฒนา', 'ปัญหา', 'คุณภาพ', 'เรียน',
+        'อาจารย์', 'เนื้อหา', 'งาน', 'คะแนน', 'สอบ', 'หัวข้อ', 'ตัวอย่าง', 'บทเรียน'
+    }
+
+    candidate_tokens = set(frequent_tokens | low_idf_tokens)
+    candidate_tokens = {w for w in candidate_tokens if is_valid_token(w) and w not in protected_words}
+
+    diagnostics = []
+    for token in candidate_tokens:
+        df_ratio = doc_freq.get(token, 0) / doc_count
+        idf_val = idf_map.get(token, 0.0)
+        chunk_ratio = chunk_freq.get(token, 0) / chunk_count if chunk_count else 0
+        tf_val = term_freq.get(token, 0)
+
+        reason_flags = []
+        if df_ratio >= 0.6:
+            reason_flags.append('high_df')
+        if token in low_idf_tokens:
+            reason_flags.append('low_idf')
+        if chunk_ratio >= 0.8:
+            reason_flags.append('wide_coverage')
+
+        low_information_score = (0.45 * df_ratio) + (0.35 * chunk_ratio) + (0.20 * (1.0 / max(idf_val, 1.0)))
+        diagnostics.append({
+            'token': token,
+            'df_ratio': round(df_ratio, 3),
+            'idf': round(float(idf_val), 3),
+            'chunk_ratio': round(chunk_ratio, 3),
+            'tf': int(tf_val),
+            'low_information_score': round(float(low_information_score), 3),
+            'reason': ','.join(reason_flags) if reason_flags else 'mixed'
+        })
+
+    diagnostics_df = pd.DataFrame(diagnostics)
+    if diagnostics_df.empty:
+        return set(base_stopwords), diagnostics_df
+
+    diagnostics_df = diagnostics_df.sort_values(
+        by=['low_information_score', 'tf', 'df_ratio'],
+        ascending=[False, False, False]
+    )
+
+    learned_tokens = diagnostics_df.head(max_new_words)['token'].tolist()
+    final_stopwords = set(base_stopwords) | set(learned_tokens)
+    return final_stopwords, diagnostics_df
+
+def tokenize_for_analysis(text, stopwords):
+    tokens = thai_tokenizer(str(text))
+    return [w for w in tokens if is_valid_token(w) and w not in stopwords]
+
+def summarize_transcript_nlp(srt_df, stopwords, n_points=6):
+    rows = srt_df[['Time', 'Text', 'Prediction_Class', 'Confidence']].copy()
+    rows['Text'] = rows['Text'].astype(str).str.strip()
+    rows = rows[rows['Text'] != '']
+    if rows.empty:
+        return {
+            'summary_points': [],
+            'key_terms': [],
+            'actionable_insights': [],
+            'summary_table': pd.DataFrame(columns=['Time', 'Text', 'Score'])
+        }
+
+    vec = TfidfVectorizer(
+        tokenizer=thai_tokenizer,
+        token_pattern=None,
+        ngram_range=(1, 2),
+        stop_words=list(stopwords),
+        min_df=1
+    )
+    matrix = vec.fit_transform(rows['Text'].tolist())
+    if matrix.shape[0] == 1:
+        only_text = rows.iloc[0]['Text']
+        return {
+            'summary_points': [f"[{rows.iloc[0]['Time']}] {only_text}"],
+            'key_terms': [],
+            'actionable_insights': [],
+            'summary_table': pd.DataFrame([{
+                'Time': rows.iloc[0]['Time'],
+                'Text': only_text,
+                'Score': 1.0
+            }])
+        }
+
+    dense = matrix.toarray()
+    centroid = dense.mean(axis=0, keepdims=True)
+    relevance = cosine_similarity(dense, centroid).ravel()
+    sim_matrix = cosine_similarity(dense)
+
+    # MMR: เลือกประโยคสำคัญที่ยังไม่ซ้ำกันมาก เพื่อให้สรุปใช้งานได้จริง
+    selected = []
+    lambda_mmr = 0.72
+    top_n = min(n_points, len(rows))
+    candidate_idx = list(np.argsort(relevance)[::-1])
+
+    while len(selected) < top_n and candidate_idx:
+        if not selected:
+            selected.append(candidate_idx.pop(0))
+            continue
+
+        best_idx = None
+        best_score = -1e9
+        for idx in candidate_idx:
+            redundancy = max(sim_matrix[idx, s] for s in selected)
+            mmr_score = (lambda_mmr * relevance[idx]) - ((1 - lambda_mmr) * redundancy)
+            if mmr_score > best_score:
+                best_score = mmr_score
+                best_idx = idx
+
+        selected.append(best_idx)
+        candidate_idx.remove(best_idx)
+
+    selected = sorted(selected)
+    selected_rows = rows.iloc[selected].copy()
+    selected_rows['Score'] = [float(relevance[i]) for i in selected]
+
+    summary_points = [f"[{r.Time}] {r.Text}" for r in selected_rows.itertuples()]
+
+    feature_names = np.array(vec.get_feature_names_out())
+    global_tfidf = dense.mean(axis=0)
+    top_term_idx = np.argsort(global_tfidf)[::-1][:12]
+    key_terms = [feature_names[i] for i in top_term_idx if is_valid_token(feature_names[i])]
+
+    pos_rows = rows[rows['Prediction_Class'] == 2]
+    neg_rows = rows[rows['Prediction_Class'] == 0]
+
+    actionable_insights = []
+    if not pos_rows.empty:
+        best_pos = pos_rows.sort_values('Confidence', ascending=False).iloc[0]
+        actionable_insights.append(f"ช่วงที่ให้ผลดี: [{best_pos['Time']}] {best_pos['Text']}")
+    if not neg_rows.empty:
+        best_neg = neg_rows.sort_values('Confidence', ascending=False).iloc[0]
+        actionable_insights.append(f"ช่วงที่ควรปรับปรุง: [{best_neg['Time']}] {best_neg['Text']}")
+
+    neg_terms = []
+    if not neg_rows.empty:
+        neg_tokens = []
+        for text in neg_rows['Text']:
+            neg_tokens.extend(tokenize_for_analysis(text, stopwords))
+        neg_terms = [w for w, c in Counter(neg_tokens).most_common(5) if c >= 2]
+        if neg_terms:
+            actionable_insights.append(f"คำเสี่ยงที่พบซ้ำในบริบทลบ: {', '.join(neg_terms)}")
+
+    return {
+        'summary_points': summary_points,
+        'key_terms': key_terms,
+        'actionable_insights': actionable_insights,
+        'summary_table': selected_rows[['Time', 'Text', 'Score']].reset_index(drop=True)
+    }
+
 @st.cache_resource
 def train_model():
     vec = TfidfVectorizer(tokenizer=thai_tokenizer, ngram_range=(1, 2))
@@ -127,11 +336,12 @@ with tab1:
     if st.button("สร้าง Word Cloud"):
         with st.spinner("กำลังประมวลผลคำศัพท์..."):
             all_words = []
-            stopwords = list(thai_stopwords()) + [' ', '  ', '\n', 'มาก', 'ดี', 'นี้', 'ก็', 'ๆ'] 
+            base_stopwords = list(thai_stopwords()) + [' ', '  ', '\n', 'มาก', 'ดี', 'นี้', 'ก็', 'ๆ']
+            stopwords, learned_sw_df = build_dynamic_stopwords(df['text'], base_stopwords)
             
             for text in df['text']:
                 tokens = thai_tokenizer(text)
-                words = [w for w in tokens if w not in stopwords and len(w) > 1]
+                words = [w for w in tokens if w not in stopwords and is_valid_token(w)]
                 all_words.extend(words)
             
             word_freq = Counter(all_words)
@@ -145,6 +355,16 @@ with tab1:
                 ax.imshow(wordcloud, interpolation='bilinear')
                 ax.axis("off")
                 st.pyplot(fig)
+
+                with st.expander("รายละเอียดคำที่ระบบเรียนรู้ว่าเป็น stop word (ชุดข้อมูลข้อเสนอแนะ)"):
+                    if not learned_sw_df.empty:
+                        st.dataframe(
+                            learned_sw_df[['token', 'tf', 'df_ratio', 'chunk_ratio', 'idf', 'low_information_score', 'reason']].head(25),
+                            use_container_width=True,
+                            hide_index=True
+                        )
+                    else:
+                        st.write("ยังไม่มีคำที่ระบบเรียนรู้เพิ่มเติม")
             except Exception as e:
                 st.error(f"กรุณาตรวจสอบไฟล์ฟอนต์ภาษาไทย\nError: {e}")
 
@@ -225,31 +445,53 @@ with tab3:
                         st.write("- ไม่พบประโยคแง่ลบ -")
 
                 # ==========================================
-                # ส่วนที่ 2: สรุปเนื้อหาด้วย LLM (Gemini Secrets)
+                # ส่วนที่ 2: สรุปเนื้อหาด้วย NLP ภายในระบบ
                 # ==========================================
                 st.divider()
-                st.subheader("สรุปใจความสำคัญจากวิดีโอด้วย LLM (Generative AI)")
-                st.markdown("ใช้แบบจำลองภาษาขนาดใหญ่ (Large Language Model) เพื่ออ่านและเรียบเรียงเนื้อหาทั้งหมดออกมาเป็นประเด็นหลัก")
+                st.subheader("สรุปใจความสำคัญจากวิดีโอด้วย NLP")
+                st.markdown("ระบบสกัดประโยคสำคัญอัตโนมัติจากไฟล์ SRT ด้วย TF-IDF โดยไม่ต้องใช้ API ภายนอก")
                 
                 full_transcript = " ".join(srt_df['Text'].tolist())
-                
+                base_srt_stopwords = list(thai_stopwords()) + [
+                    ' ', '  ', '\n', 'มาก', 'ดี', 'นี้', 'ก็', 'ๆ', 'ว่า', 'แล้ว', 'ครับ', 'ค่ะ',
+                    'ให้', 'ได้', 'ที่', 'ไป', 'มา'
+                ]
+                srt_stopwords, srt_learned_sw_df = build_dynamic_stopwords(srt_df['Text'], base_srt_stopwords)
+
                 if len(full_transcript) > 100:
-                    if st.button("เริ่มการสรุปเนื้อหาด้วย LLM"):
-                        with st.spinner("LLM กำลังทำความเข้าใจและเรียบเรียงเนื้อหา... (อาจใช้เวลาสักครู่)"):
-                            try:
-                                api_key = st.secrets["GEMINI_API_KEY"]
-                                genai.configure(api_key=api_key)
-                                
-                                model = genai.GenerativeModel('gemini-2.5-flash')
-                                prompt = f"ทำหน้าที่เป็นผู้ช่วยสอน สรุปเนื้อหาจากบทบรรยาย (Transcript) ต่อไปนี้ให้เป็นประเด็นหลัก 3-5 ข้อ สั้น กระชับ เข้าใจง่าย เป็นภาษาไทย:\n\n{full_transcript}"
-                                
-                                response = model.generate_content(prompt)
-                                st.success("ประมวลผลเสร็จสิ้น")
-                                st.write(response.text)
-                            except KeyError:
-                                st.error("ไม่พบ API Key ในระบบ กรุณาตั้งค่า Streamlit Secrets (GEMINI_API_KEY) ใน Streamlit Cloud ก่อนใช้งาน")
-                            except Exception as e:
-                                st.error(f"เกิดข้อผิดพลาดในการประมวลผล: {e}")
+                    with st.spinner("NLP กำลังสรุปประเด็นสำคัญจากไฟล์..."):
+                        summary_result = summarize_transcript_nlp(srt_df, srt_stopwords, n_points=6)
+
+                    st.success("สรุปผลอัตโนมัติสำเร็จ (ละเอียดเชิงใช้งาน)")
+                    st.markdown("**ประเด็นสรุปหลัก (ลดความซ้ำและครอบคลุมหลายช่วงเวลา):**")
+                    for idx, point in enumerate(summary_result['summary_points'], start=1):
+                        st.write(f"{idx}. {point}")
+
+                    st.markdown("**คำสำคัญที่เป็นแกนของเนื้อหา:**")
+                    if summary_result['key_terms']:
+                        st.write(", ".join(summary_result['key_terms']))
+                    else:
+                        st.write("ยังไม่พบคำสำคัญที่ชัดเจน")
+
+                    st.markdown("**ข้อสรุปเชิงปฏิบัติ (Actionable):**")
+                    if summary_result['actionable_insights']:
+                        for insight in summary_result['actionable_insights']:
+                            st.write(f"- {insight}")
+                    else:
+                        st.write("ยังไม่สามารถสกัดข้อสรุปเชิงปฏิบัติได้จากข้อมูลปัจจุบัน")
+
+                    with st.expander("ตารางคะแนนประโยคที่ถูกเลือกเข้าสรุป"):
+                        st.dataframe(summary_result['summary_table'], use_container_width=True, hide_index=True)
+
+                    with st.expander("รายละเอียดคำที่ระบบเรียนรู้ว่าเป็น stop word (จากไฟล์ SRT นี้)"):
+                        if not srt_learned_sw_df.empty:
+                            st.dataframe(
+                                srt_learned_sw_df[['token', 'tf', 'df_ratio', 'chunk_ratio', 'idf', 'low_information_score', 'reason']].head(35),
+                                use_container_width=True,
+                                hide_index=True
+                            )
+                        else:
+                            st.write("ยังไม่มีคำที่ระบบเรียนรู้เพิ่มเติม")
                 else:
                     st.write("เนื้อหาในวิดีโอสั้นเกินไป ระบบจึงข้ามการสรุปผล")
 
@@ -260,11 +502,10 @@ with tab3:
                 st.subheader("ภาพรวมคำศัพท์จากบทบรรยาย (Transcript Word Cloud)")
                 
                 all_srt_words = []
-                srt_stopwords = list(thai_stopwords()) + [' ', '  ', '\n', 'มาก', 'ดี', 'นี้', 'ก็', 'ๆ', 'ว่า', 'แล้ว', 'ครับ', 'ค่ะ', 'ให้', 'ได้', 'ที่', 'ไป', 'มา']
                 
                 for text in srt_df['Text']:
                     tokens = thai_tokenizer(text)
-                    words = [w for w in tokens if w not in srt_stopwords and len(w) > 1]
+                    words = [w for w in tokens if w not in srt_stopwords and is_valid_token(w)]
                     all_srt_words.extend(words)
                 
                 srt_word_freq = Counter(all_srt_words)
