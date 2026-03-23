@@ -184,31 +184,103 @@ with tab3:
                 
                 st.success(f"ประมวลผลสำเร็จ จำนวนข้อความทั้งหมด: {len(srt_df)} บรรทัด")
                 
-                # ตั้งค่าคุณสมบัติฟอนต์สำหรับ Matplotlib
+                # ==========================================
+                # ส่วนที่ 1: สรุปผลการวิเคราะห์ไฟล์บรรยายเชิงลึก
+                # ==========================================
+                st.divider()
+                st.subheader("📊 สรุปภาพรวมอารมณ์ของการบรรยาย (Detailed Summary)")
+                
+                total_lines = len(srt_df)
+                pos_count = len(srt_df[srt_df['Prediction_Class'] == 2])
+                neu_count = len(srt_df[srt_df['Prediction_Class'] == 1])
+                neg_count = len(srt_df[srt_df['Prediction_Class'] == 0])
+
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("จำนวนประโยคทั้งหมด", f"{total_lines} ประโยค")
+                col2.metric("แง่บวก (Positive)", f"{(pos_count/total_lines)*100:.1f}%")
+                col3.metric("เป็นกลาง (Neutral)", f"{(neu_count/total_lines)*100:.1f}%")
+                col4.metric("แง่ลบ (Negative)", f"{(neg_count/total_lines)*100:.1f}%")
+                
+                st.markdown("<br>", unsafe_allow_html=True)
+                
+                # แสดงประโยคที่มีระดับความมั่นใจสูงสุด
+                colA, colB = st.columns(2)
+                with colA:
+                    st.markdown("**🟢 ประโยคแง่บวกที่ชัดเจนที่สุด 3 อันดับ:**")
+                    top_pos = srt_df[srt_df['Prediction_Class'] == 2].sort_values(by='Confidence', ascending=False).head(3)
+                    if not top_pos.empty:
+                        st.dataframe(top_pos[['Time', 'Text']], hide_index=True, use_container_width=True)
+                    else:
+                        st.write("- ไม่พบประโยคแง่บวก -")
+                        
+                with colB:
+                    st.markdown("**🔴 ประโยคแง่ลบที่ชัดเจนที่สุด 3 อันดับ:**")
+                    top_neg = srt_df[srt_df['Prediction_Class'] == 0].sort_values(by='Confidence', ascending=False).head(3)
+                    if not top_neg.empty:
+                        st.dataframe(top_neg[['Time', 'Text']], hide_index=True, use_container_width=True)
+                    else:
+                        st.write("- ไม่พบประโยคแง่ลบ -")
+
+                # ==========================================
+                # ส่วนที่ 2: Word Cloud จากไฟล์ SRT
+                # ==========================================
+                st.divider()
+                st.subheader("☁️ ภาพรวมคำศัพท์จากบทบรรยาย (Transcript Word Cloud)")
+                st.markdown("วิเคราะห์ความถี่ของคำศัพท์เพื่อค้นหาหัวข้อหลักที่ถูกพูดถึงมากที่สุดในวิดีโอนี้")
+                
+                # กรองคำศัพท์เฉพาะสำหรับไฟล์ SRT
+                all_srt_words = []
+                srt_stopwords = list(thai_stopwords()) + [' ', '  ', '\n', 'มาก', 'ดี', 'นี้', 'ก็', 'ๆ', 'ว่า', 'แล้ว', 'ครับ', 'ค่ะ', 'ให้', 'ได้', 'ที่', 'ไป', 'มา']
+                
+                for text in srt_df['Text']:
+                    tokens = thai_tokenizer(text)
+                    words = [w for w in tokens if w not in srt_stopwords and len(w) > 1]
+                    all_srt_words.extend(words)
+                
+                srt_word_freq = Counter(all_srt_words)
+                
+                if srt_word_freq:
+                    try:
+                        srt_wordcloud = WordCloud(
+                            font_path=font_path, width=800, height=400, 
+                            background_color='white', colormap='plasma' # ใช้สี plasma ให้ต่างจาก tab 1
+                        ).generate_from_frequencies(srt_word_freq)
+                        
+                        fig3, ax3 = plt.subplots(figsize=(10, 5))
+                        ax3.imshow(srt_wordcloud, interpolation='bilinear')
+                        ax3.axis("off")
+                        st.pyplot(fig3)
+                    except Exception as e:
+                        st.error(f"ไม่สามารถสร้าง Word Cloud ได้ กรุณาตรวจสอบไฟล์ฟอนต์ภาษาไทย\nError: {e}")
+                else:
+                    st.warning("ไม่พบคำศัพท์ที่สามารถนำมาสร้าง Word Cloud ได้")
+
+                # ==========================================
+                # ส่วนที่ 3: กราฟ Timeline และตารางรายละเอียด (โค้ดเดิม)
+                # ==========================================
+                st.divider()
+                st.subheader("📈 กราฟแนวโน้มอารมณ์ของการบรรยาย (Sentiment Trajectory)")
                 try:
                     thai_font = fm.FontProperties(fname=font_path, size=12)
                     thai_font_title = fm.FontProperties(fname=font_path, size=16)
                 except:
-                    # กรณีหาไฟล์ฟอนต์ไม่พบ จะใช้ค่าเริ่มต้นเพื่อไม่ให้ระบบพัง
                     thai_font = fm.FontProperties()
                     thai_font_title = fm.FontProperties()
                 
-                # แสดงกราฟ Timeline พร้อมฟอนต์ภาษาไทย
                 fig2, ax2 = plt.subplots(figsize=(12, 4))
                 ax2.plot(srt_df.index, srt_df['Sentiment_Score'], marker='o', linestyle='-', color='#1f77b4', markersize=4)
                 
                 ax2.set_yticks([-1, 0, 1])
-                # เปลี่ยนแกน Y เป็นภาษาไทย
                 ax2.set_yticklabels(['แง่ลบ', 'เป็นกลาง', 'แง่บวก'], fontproperties=thai_font)
                 
-                ax2.set_title("แนวโน้มอารมณ์ของการบรรยาย (Sentiment Trajectory)", fontproperties=thai_font_title)
-                ax2.set_xlabel("ลำดับข้อความในวิดีโอ (ตามเวลา)", fontproperties=thai_font)
+                ax2.set_title("ความเปลี่ยนแปลงทางอารมณ์ตามลำดับข้อความ", fontproperties=thai_font_title)
+                ax2.set_xlabel("ลำดับข้อความในวิดีโอ (จากต้นจนจบ)", fontproperties=thai_font)
                 ax2.set_ylabel("ระดับอารมณ์ความรู้สึก", fontproperties=thai_font)
                 
                 ax2.grid(True, linestyle='--', alpha=0.7)
                 st.pyplot(fig2)
                 
-                st.subheader("รายละเอียดการวิเคราะห์รายบรรทัด")
+                st.subheader("🔍 รายละเอียดการวิเคราะห์รายบรรทัด")
                 st.dataframe(srt_df[['Time', 'Text', 'Prediction_Class', 'Confidence']], use_container_width=True)
                 
             else:
