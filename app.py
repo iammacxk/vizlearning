@@ -113,11 +113,6 @@ font_path = 'THSarabunNew.ttf'
 # ==========================================
 st.set_page_config(page_title="Student Feedback & Transcript Analyzer", layout="wide")
 
-# สร้าง Sidebar สำหรับตั้งค่า LLM
-st.sidebar.header("การตั้งค่า LLM (Generative AI)")
-api_key_input = st.sidebar.text_input("กรุณาระบุ Gemini API Key", type="password", help="รับคีย์ได้ฟรีที่ Google AI Studio")
-st.sidebar.markdown("ใช้สำหรับการสรุปเนื้อหาจากไฟล์ SRT แบบอัตโนมัติ")
-
 st.title("ระบบวิเคราะห์ข้อเสนอแนะและบทบรรยายการสอน")
 
 tab1, tab2, tab3 = st.tabs([
@@ -126,6 +121,7 @@ tab1, tab2, tab3 = st.tabs([
     "วิเคราะห์ไฟล์บรรยาย SRT (Timeline)"
 ])
 
+# ----------------- Tab 1: Word Cloud -----------------
 with tab1:
     st.header("ภาพรวมคำศัพท์ที่พูดถึงมากที่สุด (EDA)")
     if st.button("สร้าง Word Cloud"):
@@ -152,6 +148,7 @@ with tab1:
             except Exception as e:
                 st.error(f"กรุณาตรวจสอบไฟล์ฟอนต์ภาษาไทย\nError: {e}")
 
+# ----------------- Tab 2: LIME Visualization -----------------
 with tab2:
     st.header("วิเคราะห์อารมณ์และอรรถาธิบายการทำงานของแบบจำลอง (LIME)")
     user_input = st.text_area("กรอกข้อความที่ต้องการวิเคราะห์:", "วิชานี้เนื้อหาดีมาก แต่ระบบส่งงานใช้งานยากไปหน่อย")
@@ -169,6 +166,7 @@ with tab2:
             exp = explainer.explain_instance(user_input, pipeline.predict_proba, num_features=6, labels=[prediction])
             components.html(exp.as_html(), height=400, scrolling=True)
 
+# ----------------- Tab 3: SRT Analysis -----------------
 with tab3:
     st.header("วิเคราะห์แนวโน้มอารมณ์จากไฟล์คำบรรยาย (.srt)")
     st.markdown("ระบบจะสกัดข้อความตามช่วงเวลาและวิเคราะห์การเปลี่ยนแปลงของบริบทแบบ Time-Series")
@@ -190,6 +188,9 @@ with tab3:
                 
                 st.success(f"ประมวลผลสำเร็จ จำนวนข้อความทั้งหมด: {len(srt_df)} บรรทัด")
                 
+                # ==========================================
+                # ส่วนที่ 1: สรุปผลการวิเคราะห์ไฟล์บรรยายเชิงลึก
+                # ==========================================
                 st.divider()
                 st.subheader("สรุปภาพรวมอารมณ์ของการบรรยาย (Detailed Summary)")
                 
@@ -224,7 +225,7 @@ with tab3:
                         st.write("- ไม่พบประโยคแง่ลบ -")
 
                 # ==========================================
-                # ส่วนที่ 2: สรุปเนื้อหาด้วย LLM (Gemini)
+                # ส่วนที่ 2: สรุปเนื้อหาด้วย LLM (Gemini Secrets)
                 # ==========================================
                 st.divider()
                 st.subheader("สรุปใจความสำคัญจากวิดีโอด้วย LLM (Generative AI)")
@@ -233,21 +234,22 @@ with tab3:
                 full_transcript = " ".join(srt_df['Text'].tolist())
                 
                 if len(full_transcript) > 100:
-                    if not api_key_input:
-                        st.info("กรุณาระบุ API Key ที่แถบเมนูด้านซ้ายเพื่อเปิดใช้งานฟีเจอร์นี้")
-                    else:
-                        if st.button("เริ่มการสรุปเนื้อหาด้วย LLM"):
-                            with st.spinner("LLM กำลังทำความเข้าใจและเรียบเรียงเนื้อหา... (อาจใช้เวลาสักครู่)"):
-                                try:
-                                    genai.configure(api_key=api_key_input)
-                                    model = genai.GenerativeModel('gemini-1.5-flash')
-                                    prompt = f"ทำหน้าที่เป็นผู้ช่วยสอน สรุปเนื้อหาจากบทบรรยาย (Transcript) ต่อไปนี้ให้เป็นประเด็นหลัก 3-5 ข้อ สั้น กระชับ เข้าใจง่าย เป็นภาษาไทย:\n\n{full_transcript}"
-                                    
-                                    response = model.generate_content(prompt)
-                                    st.success("ประมวลผลเสร็จสิ้น")
-                                    st.write(response.text)
-                                except Exception as e:
-                                    st.error(f"เกิดข้อผิดพลาดในการเชื่อมต่อกับ LLM กรุณาตรวจสอบ API Key: {e}")
+                    if st.button("เริ่มการสรุปเนื้อหาด้วย LLM"):
+                        with st.spinner("LLM กำลังทำความเข้าใจและเรียบเรียงเนื้อหา... (อาจใช้เวลาสักครู่)"):
+                            try:
+                                api_key = st.secrets["GEMINI_API_KEY"]
+                                genai.configure(api_key=api_key)
+                                
+                                model = genai.GenerativeModel('gemini-1.5-flash')
+                                prompt = f"ทำหน้าที่เป็นผู้ช่วยสอน สรุปเนื้อหาจากบทบรรยาย (Transcript) ต่อไปนี้ให้เป็นประเด็นหลัก 3-5 ข้อ สั้น กระชับ เข้าใจง่าย เป็นภาษาไทย:\n\n{full_transcript}"
+                                
+                                response = model.generate_content(prompt)
+                                st.success("ประมวลผลเสร็จสิ้น")
+                                st.write(response.text)
+                            except KeyError:
+                                st.error("ไม่พบ API Key ในระบบ กรุณาตั้งค่า Streamlit Secrets (GEMINI_API_KEY) ใน Streamlit Cloud ก่อนใช้งาน")
+                            except Exception as e:
+                                st.error(f"เกิดข้อผิดพลาดในการประมวลผล: {e}")
                 else:
                     st.write("เนื้อหาในวิดีโอสั้นเกินไป ระบบจึงข้ามการสรุปผล")
 
