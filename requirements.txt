@@ -6,3 +6,4 @@ wordcloud
 scikit-learn
 lime
 pythainlp
+google-generativeai
