@@ -12,6 +12,7 @@ from sklearn.pipeline import make_pipeline
 from lime.lime_text import LimeTextExplainer
 from pythainlp.tokenize import word_tokenize
 from pythainlp.corpus import thai_stopwords
+from pythainlp.summarize import summarize  # นำเข้าฟังก์ชัน AI สรุปข้อความ
 import streamlit.components.v1 as components
 
 # ==========================================
@@ -120,6 +121,7 @@ tab1, tab2, tab3 = st.tabs([
     "วิเคราะห์ไฟล์บรรยาย SRT (Timeline)"
 ])
 
+# ----------------- Tab 1: Word Cloud -----------------
 with tab1:
     st.header("ภาพรวมคำศัพท์ที่พูดถึงมากที่สุด (EDA)")
     if st.button("สร้าง Word Cloud"):
@@ -146,6 +148,7 @@ with tab1:
             except Exception as e:
                 st.error(f"กรุณาตรวจสอบไฟล์ฟอนต์ภาษาไทย\nError: {e}")
 
+# ----------------- Tab 2: LIME Visualization -----------------
 with tab2:
     st.header("วิเคราะห์อารมณ์และอรรถาธิบายการทำงานของแบบจำลอง (LIME)")
     user_input = st.text_area("กรอกข้อความที่ต้องการวิเคราะห์:", "วิชานี้เนื้อหาดีมาก แต่ระบบส่งงานใช้งานยากไปหน่อย")
@@ -163,6 +166,7 @@ with tab2:
             exp = explainer.explain_instance(user_input, pipeline.predict_proba, num_features=6, labels=[prediction])
             components.html(exp.as_html(), height=400, scrolling=True)
 
+# ----------------- Tab 3: SRT Analysis -----------------
 with tab3:
     st.header("วิเคราะห์แนวโน้มอารมณ์จากไฟล์คำบรรยาย (.srt)")
     st.markdown("ระบบจะสกัดข้อความตามช่วงเวลาและวิเคราะห์การเปลี่ยนแปลงของบริบทแบบ Time-Series")
@@ -188,7 +192,7 @@ with tab3:
                 # ส่วนที่ 1: สรุปผลการวิเคราะห์ไฟล์บรรยายเชิงลึก
                 # ==========================================
                 st.divider()
-                st.subheader("สรุปภาพรวมอารมณ์ของการบรรยาย (Detailed Summary)")
+                st.subheader("📊 สรุปภาพรวมอารมณ์ของการบรรยาย (Detailed Summary)")
                 
                 total_lines = len(srt_df)
                 pos_count = len(srt_df[srt_df['Prediction_Class'] == 2])
@@ -206,7 +210,7 @@ with tab3:
                 # แสดงประโยคที่มีระดับความมั่นใจสูงสุด
                 colA, colB = st.columns(2)
                 with colA:
-                    st.markdown("**ประโยคแง่บวกที่ชัดเจนที่สุด 3 อันดับ:**")
+                    st.markdown("**🟢 ประโยคแง่บวกที่ชัดเจนที่สุด 3 อันดับ:**")
                     top_pos = srt_df[srt_df['Prediction_Class'] == 2].sort_values(by='Confidence', ascending=False).head(3)
                     if not top_pos.empty:
                         st.dataframe(top_pos[['Time', 'Text']], hide_index=True, use_container_width=True)
@@ -214,7 +218,7 @@ with tab3:
                         st.write("- ไม่พบประโยคแง่บวก -")
                         
                 with colB:
-                    st.markdown("**ประโยคแง่ลบที่ชัดเจนที่สุด 3 อันดับ:**")
+                    st.markdown("**🔴 ประโยคแง่ลบที่ชัดเจนที่สุด 3 อันดับ:**")
                     top_neg = srt_df[srt_df['Prediction_Class'] == 0].sort_values(by='Confidence', ascending=False).head(3)
                     if not top_neg.empty:
                         st.dataframe(top_neg[['Time', 'Text']], hide_index=True, use_container_width=True)
@@ -222,13 +226,35 @@ with tab3:
                         st.write("- ไม่พบประโยคแง่ลบ -")
 
                 # ==========================================
-                # ส่วนที่ 2: Word Cloud จากไฟล์ SRT
+                # ส่วนที่ 2: AI สรุปใจความสำคัญจากไฟล์ SRT
                 # ==========================================
                 st.divider()
-                st.subheader("ภาพรวมคำศัพท์จากบทบรรยาย (Transcript Word Cloud)")
+                st.subheader("🤖 AI สรุปใจความสำคัญจากวิดีโอ (Auto-Summarization)")
+                st.markdown("ดึงประโยคที่เป็นแก่นสำคัญที่สุดของการบรรยาย (Extractive Summarization)")
+                
+                full_transcript = " ".join(srt_df['Text'].tolist())
+                
+                if len(full_transcript) > 100:
+                    with st.spinner("AI กำลังวิเคราะห์และสรุปเนื้อหา..."):
+                        try:
+                            # ใช้ AI ของ PyThaiNLP สรุปเนื้อหาให้เหลือ 3 ประโยคสำคัญ
+                            summary_sentences = summarize(full_transcript, n=3, engine="textrank")
+                            
+                            st.info("💡 **ประเด็นหลักที่พูดถึงในวิดีโอนี้:**")
+                            for i, sentence in enumerate(summary_sentences):
+                                st.write(f"**{i+1}.** {sentence}")
+                        except Exception as e:
+                            st.warning(f"ไม่สามารถสรุปเนื้อหาได้ เนื่องจาก: {e}")
+                else:
+                    st.write("เนื้อหาในวิดีโอสั้นเกินไป ระบบจึงไม่ได้ทำการสรุป")
+
+                # ==========================================
+                # ส่วนที่ 3: Word Cloud จากไฟล์ SRT
+                # ==========================================
+                st.divider()
+                st.subheader("☁️ ภาพรวมคำศัพท์จากบทบรรยาย (Transcript Word Cloud)")
                 st.markdown("วิเคราะห์ความถี่ของคำศัพท์เพื่อค้นหาหัวข้อหลักที่ถูกพูดถึงมากที่สุดในวิดีโอนี้")
                 
-                # กรองคำศัพท์เฉพาะสำหรับไฟล์ SRT
                 all_srt_words = []
                 srt_stopwords = list(thai_stopwords()) + [' ', '  ', '\n', 'มาก', 'ดี', 'นี้', 'ก็', 'ๆ', 'ว่า', 'แล้ว', 'ครับ', 'ค่ะ', 'ให้', 'ได้', 'ที่', 'ไป', 'มา']
                 
@@ -243,7 +269,7 @@ with tab3:
                     try:
                         srt_wordcloud = WordCloud(
                             font_path=font_path, width=800, height=400, 
-                            background_color='white', colormap='plasma' # ใช้สี plasma ให้ต่างจาก tab 1
+                            background_color='white', colormap='plasma' 
                         ).generate_from_frequencies(srt_word_freq)
                         
                         fig3, ax3 = plt.subplots(figsize=(10, 5))
@@ -256,10 +282,10 @@ with tab3:
                     st.warning("ไม่พบคำศัพท์ที่สามารถนำมาสร้าง Word Cloud ได้")
 
                 # ==========================================
-                # ส่วนที่ 3: กราฟ Timeline และตารางรายละเอียด (โค้ดเดิม)
+                # ส่วนที่ 4: กราฟ Timeline และตารางรายละเอียด
                 # ==========================================
                 st.divider()
-                st.subheader("กราฟแนวโน้มอารมณ์ของการบรรยาย (Sentiment Trajectory)")
+                st.subheader("📈 กราฟแนวโน้มอารมณ์ของการบรรยาย (Sentiment Trajectory)")
                 try:
                     thai_font = fm.FontProperties(fname=font_path, size=12)
                     thai_font_title = fm.FontProperties(fname=font_path, size=16)
@@ -280,7 +306,7 @@ with tab3:
                 ax2.grid(True, linestyle='--', alpha=0.7)
                 st.pyplot(fig2)
                 
-                st.subheader("รายละเอียดการวิเคราะห์รายบรรทัด")
+                st.subheader("🔍 รายละเอียดการวิเคราะห์รายบรรทัด")
                 st.dataframe(srt_df[['Time', 'Text', 'Prediction_Class', 'Confidence']], use_container_width=True)
                 
             else:
